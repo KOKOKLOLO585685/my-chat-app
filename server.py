@@ -1,16 +1,18 @@
 import os
 import shutil
 import sqlite3
+import hashlib
 import uvicorn
 import socketio
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from passlib.context import CryptContext
 
 os.makedirs("avatars", exist_ok=True)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_pass(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 def init_db():
     conn = sqlite3.connect("chat.db")
@@ -82,9 +84,8 @@ def register(data: AuthData):
     conn = sqlite3.connect("chat.db")
     c = conn.cursor()
     try:
-        hashed = pwd_context.hash(data.password)
         c.execute("INSERT INTO users (username, password, avatar) VALUES (?, ?, ?)",
-                  (data.username, hashed, ""))
+                  (data.username, hash_pass(data.password), ""))
         conn.commit()
         user_id = c.lastrowid
         return {"id": user_id, "username": data.username, "avatar": ""}
@@ -100,9 +101,9 @@ def login(data: AuthData):
     c.execute("SELECT id, username, password, avatar FROM users WHERE username = ?", (data.username,))
     user = c.fetchone()
     conn.close()
-    if not user or not pwd_context.verify(data.password, user[2]):
+    if not user or user != hash_pass(data.password):
         raise HTTPException(status_code=400, detail="بيانات الدخول غير صحيحة")
-    return {"id": user[0], "username": user[1], "avatar": user[3]}
+    return {"id": user, "username": user, "avatar": user}
 
 @app.post("/upload-avatar/{user_id}")
 def upload_avatar(user_id: int, file: UploadFile = File(...)):
@@ -126,7 +127,7 @@ async def send_friend_request(data: FriendReqData):
     if not target:
         conn.close()
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
-    target_id = target[0]
+    target_id = target
     if target_id == data.sender_id:
         conn.close()
         raise HTTPException(status_code=400, detail="لا يمكنك إضافة نفسك")
@@ -170,7 +171,7 @@ def search_groups(q: str = ""):
     conn = sqlite3.connect("chat.db")
     c = conn.cursor()
     c.execute("SELECT id, name FROM groups WHERE name LIKE ?", (f"%{q}%",))
-    results = [{"id": r[0], "name": r[1]} for r in c.fetchall()]
+    results = [{"id": r, "name": r} for r in c.fetchall()]
     conn.close()
     return results
 
@@ -194,21 +195,21 @@ def get_user_data(user_id: int):
     c.execute('''SELECT u.id, u.username, u.avatar FROM users u
                  JOIN friends f ON u.id = f.friend_id
                  WHERE f.user_id = ? AND f.status = 'accepted' AND u.id != ?''', (user_id, user_id))
-    friends = [{"id": r[0], "username": r[1], "avatar": r[2]} for r in c.fetchall()]
+    friends = [{"id": r, "username": r, "avatar": r} for r in c.fetchall()]
 
     c.execute('''SELECT u.id, u.username, u.avatar FROM users u
-                 JOIN friends f ON u.id = f.user_id
+                 JOIN friends f ON u.id = f.friend_id
                  WHERE f.friend_id = ? AND f.status = 'pending' AND u.id != ?''', (user_id, user_id))
-    requests = [{"id": r[0], "username": r[1], "avatar": r[2]} for r in c.fetchall()]
+    requests = [{"id": r, "username": r, "avatar": r} for r in c.fetchall()]
 
     c.execute('''SELECT g.id, g.name FROM groups g
                  JOIN group_members gm ON g.id = gm.group_id
                  WHERE gm.user_id = ?''', (user_id,))
-    groups = [{"id": r[0], "name": r[1]} for r in c.fetchall()]
+    groups = [{"id": r, "name": r} for r in c.fetchall()]
     conn.close()
 
     return {
-        "user": {"id": u[0], "username": u[1], "avatar": u[2]},
+        "user": {"id": u, "username": u, "avatar": u},
         "friends": friends,
         "requests": requests,
         "groups": groups
@@ -219,7 +220,7 @@ def get_messages(chat_id: str):
     conn = sqlite3.connect("chat.db")
     c = conn.cursor()
     c.execute("SELECT sender_id, sender_name, text FROM messages WHERE chat_id = ?", (chat_id,))
-    msgs = [{"sender_id": r[0], "sender_name": r[1], "text": r[2]} for r in c.fetchall()]
+    msgs = [{"sender_id": r, "sender_name": r, "text": r} for r in c.fetchall()]
     conn.close()
     return msgs
 
