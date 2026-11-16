@@ -127,11 +127,13 @@ async def send_friend_request(data: FriendReqData):
         conn.close()
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
     target_id = target[0]
-    if target_id != data.sender_id:
-        c.execute("INSERT OR IGNORE INTO friends (user_id, friend_id, status) VALUES (?, ?, 'pending')",
-                  (data.sender_id, target_id))
-        conn.commit()
-        await sio.emit("refresh_home", {"msg": "طلب صداقة جديد!"}, room=f"user_{target_id}")
+    if target_id == data.sender_id:
+        conn.close()
+        raise HTTPException(status_code=400, detail="لا يمكنك إضافة نفسك")
+    c.execute("INSERT OR IGNORE INTO friends (user_id, friend_id, status) VALUES (?, ?, 'pending')",
+              (data.sender_id, target_id))
+    conn.commit()
+    await sio.emit("refresh_home", {"msg": "طلب صداقة جديد!"}, room=f"user_{target_id}")
     conn.close()
     return {"message": "تم إرسال الطلب"}
 
@@ -163,7 +165,6 @@ async def create_group(data: GroupData):
     conn.close()
     return {"id": group_id, "name": data.name}
 
-# --- مسارات البحث عن القروبات والانضمام ---
 @app.get("/search-groups")
 def search_groups(q: str = ""):
     conn = sqlite3.connect("chat.db")
@@ -192,12 +193,12 @@ def get_user_data(user_id: int):
 
     c.execute('''SELECT u.id, u.username, u.avatar FROM users u
                  JOIN friends f ON u.id = f.friend_id
-                 WHERE f.user_id = ? AND f.status = 'accepted' ''', (user_id,))
+                 WHERE f.user_id = ? AND f.status = 'accepted' AND u.id != ?''', (user_id, user_id))
     friends = [{"id": r[0], "username": r[1], "avatar": r[2]} for r in c.fetchall()]
 
     c.execute('''SELECT u.id, u.username, u.avatar FROM users u
-                 JOIN friends f ON u.id = f.friend_id
-                 WHERE f.friend_id = ? AND f.status = 'pending' ''', (user_id,))
+                 JOIN friends f ON u.id = f.user_id
+                 WHERE f.friend_id = ? AND f.status = 'pending' AND u.id != ?''', (user_id, user_id))
     requests = [{"id": r[0], "username": r[1], "avatar": r[2]} for r in c.fetchall()]
 
     c.execute('''SELECT g.id, g.name FROM groups g
